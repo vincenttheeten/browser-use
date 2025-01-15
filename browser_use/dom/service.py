@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 class DomService:
-	def __init__(self, page: Page):
+	def __init__(self, page: Page, build_dom_tree_js: str | None = None):
 		self.page = page
+		self.build_dom_tree_js = build_dom_tree_js
 		self.xpath_cache = {}
 
 	# region - Clickable elements
@@ -28,7 +29,7 @@ class DomService:
 		return DOMState(element_tree=element_tree, selector_map=selector_map)
 
 	async def _build_dom_tree(self, highlight_elements: bool) -> DOMElementNode:
-		js_code = resources.read_text('browser_use.dom', 'buildDomTree.js')
+		js_code = self.build_dom_tree_js or resources.read_text('browser_use.dom', 'buildDomTree.js')
 
 		eval_page = await self.page.evaluate(
 			js_code, (highlight_elements)

@@ -72,11 +72,15 @@ class BrowserContextConfig:
 
 		no_viewport: False
 			Disable viewport
+
 		save_recording_path: None
 			Path to save video recordings
 
 		trace_path: None
 			Path to save trace files. It will auto name the file with the TRACE_PATH/{context_id}.zip
+
+		build_dom_tree_js: None
+			JavaScript code to build DOM tree. If not provided, default code will be used.
 	"""
 
 	cookies_file: str | None = None
@@ -94,6 +98,7 @@ class BrowserContextConfig:
 
 	save_recording_path: str | None = None
 	trace_path: str | None = None
+	build_dom_tree_js: str | None = None
 
 
 @dataclass
@@ -566,7 +571,7 @@ class BrowserContext:
 
 		try:
 			await self.remove_highlights()
-			dom_service = DomService(page)
+			dom_service = DomService(page, build_dom_tree_js=self.config.build_dom_tree_js)
 			content = await dom_service.get_clickable_elements()
 
 			screenshot_b64 = None
