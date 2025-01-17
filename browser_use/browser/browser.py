@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 
 from playwright._impl._api_structures import ProxySettings
-from playwright.async_api import Browser as PlaywrightBrowser, BrowserContext as PlaywrightBrowserContext
+from playwright.async_api import Browser as PlaywrightBrowser
 from playwright.async_api import (
 	Playwright,
 	async_playwright,
