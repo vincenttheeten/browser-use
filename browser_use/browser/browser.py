@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 
 from playwright._impl._api_structures import ProxySettings
-from playwright.async_api import Browser as PlaywrightBrowser
+from playwright.async_api import Browser as PlaywrightBrowser, BrowserContext as PlaywrightBrowserContext
 from playwright.async_api import (
 	Playwright,
 	async_playwright,
@@ -210,3 +210,26 @@ class Browser:
 					asyncio.run(self.close())
 		except Exception as e:
 			logger.debug(f'Failed to cleanup browser in destructor: {e}')
+
+
+class AttachedBrowser(Browser):
+	"""
+	Attaching to an existing Playwright browser instance.
+	"""
+	def __init__(
+		self,
+		playwright: Playwright,
+		playwright_browser: PlaywrightBrowser,
+		config: BrowserConfig = BrowserConfig(),
+	):
+		super().__init__(config=config)
+		self.playwright = playwright
+		self.playwright_browser = playwright_browser
+
+	async def _init(self):
+		"""Nothing to initialize, the browser session is already running"""
+		return self.playwright_browser
+	
+	async def close(self):
+		"""Nothing to close, playwright management is done somewhere else"""
+		return

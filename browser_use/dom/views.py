@@ -155,6 +155,16 @@ class DOMElementNode(DOMBaseNode):
 
 		return None
 
+	@staticmethod
+	def get_empty_dom_element_node():
+		return DOMElementNode(
+			tag_name='root',
+			is_visible=True,
+			parent=None,
+			xpath='',
+			attributes={},
+			children=[],
+		)
 
 class ElementTreeSerializer:
 	@staticmethod

@@ -101,6 +101,7 @@ class BrowserSession:
 	context: PlaywrightBrowserContext
 	current_page: Page
 	cached_state: BrowserState
+	session_id: str | None = None
 
 
 class BrowserContext:
@@ -108,15 +109,18 @@ class BrowserContext:
 		self,
 		browser: 'Browser',
 		config: BrowserContextConfig = BrowserContextConfig(),
+		session: BrowserSession | None = None,
 	):
-		self.context_id = str(uuid.uuid4())
-		logger.debug(f'Initializing new browser context with id: {self.context_id}')
+		if session and session.session_id:
+			self.context_id = session.session_id
+			logger.debug(f'Attaching to existing browser context with id: {self.context_id}')
+		else:
+			self.context_id = str(uuid.uuid4())
+			logger.debug(f'Initializing new browser context with id: {self.context_id}')
 
 		self.config = config
 		self.browser = browser
-
-		# Initialize these as None - they'll be set up when needed
-		self.session: BrowserSession | None = None
+		self.session = session
 
 	async def __aenter__(self):
 		"""Async context manager entry"""
@@ -146,10 +150,12 @@ class BrowserContext:
 				except Exception as e:
 					logger.debug(f'Failed to stop tracing: {e}')
 
-			try:
-				await self.session.context.close()
-			except Exception as e:
-				logger.debug(f'Failed to close context: {e}')
+			# If we have a session managed from outside, don't close the context
+			if not self.session.session_id:
+				try:
+					await self.session.context.close()
+				except Exception as e:
+					logger.debug(f'Failed to close context: {e}')
 		finally:
 			self.session = None
 
@@ -171,20 +177,21 @@ class BrowserContext:
 
 		playwright_browser = await self.browser.get_playwright_browser()
 
-		context = await self._create_context(playwright_browser)
+		if self.session and self.session.context:
+			context = self.session.context
+		else:
+			context = await self._create_context(playwright_browser)
+	
 		self._add_new_page_listener(context)
-		page = await context.new_page()
+	
+		if self.session and self.session.current_page:
+			page = self.session.current_page
+		else:
+			page = await context.new_page()
 
 		# Instead of calling _update_state(), create an empty initial state
 		initial_state = BrowserState(
-			element_tree=DOMElementNode(
-				tag_name='root',
-				is_visible=True,
-				parent=None,
-				xpath='',
-				attributes={},
-				children=[],
-			),
+			element_tree=DOMElementNode.get_empty_dom_element_node(),
 			selector_map={},
 			url=page.url,
 			title=await page.title(),
