@@ -67,6 +67,7 @@ class Agent:
 		controller: Controller = Controller(),
 		use_vision: bool = True,
 		save_conversation_path: Optional[str] = None,
+		save_conversation_path_encoding: Optional[str] = "utf-8",
 		max_failures: int = 3,
 		retry_delay: int = 10,
 		system_prompt_class: Type[SystemPrompt] = SystemPrompt,
@@ -95,6 +96,7 @@ class Agent:
 		self.use_vision = use_vision
 		self.llm = llm
 		self.save_conversation_path = save_conversation_path
+		self.save_conversation_path_encoding = save_conversation_path_encoding
 		self._last_result = None
 		self.include_attributes = include_attributes
 		self.max_error_length = max_error_length
@@ -322,7 +324,7 @@ class Agent:
 		# create folders if not exists
 		os.makedirs(os.path.dirname(self.save_conversation_path), exist_ok=True)
 
-		with open(self.save_conversation_path + f'_{self.n_steps}.txt', 'w') as f:
+		with open(self.save_conversation_path + f'_{self.n_steps}.txt', 'w', encoding=self.save_conversation_path_encoding) as f:
 			self._write_messages_to_file(f, input_messages)
 			self._write_response_to_file(f, response)
 
@@ -800,43 +802,46 @@ class Agent:
 		title_font: ImageFont.FreeTypeFont,
 		margin: int,
 		logo: Optional[Image.Image] = None,
+		display_step: bool = True,
+		text_color: tuple[int,int,int,int] = (255, 255, 255, 255),
+		text_box_color: tuple[int, int, int, int] = (0, 0, 0, 255),
 	) -> Image.Image:
 		"""Add step number and goal overlay to an image."""
 		image = image.convert('RGBA')
 		txt_layer = Image.new('RGBA', image.size, (0, 0, 0, 0))
 		draw = ImageDraw.Draw(txt_layer)
+		if display_step:
+			# Add step number (bottom left)
+			step_text = str(step_number)
+			step_bbox = draw.textbbox((0, 0), step_text, font=title_font)
+			step_width = step_bbox[2] - step_bbox[0]
+			step_height = step_bbox[3] - step_bbox[1]
 
-		# Add step number (bottom left)
-		step_text = str(step_number)
-		step_bbox = draw.textbbox((0, 0), step_text, font=title_font)
-		step_width = step_bbox[2] - step_bbox[0]
-		step_height = step_bbox[3] - step_bbox[1]
+			# Position step number in bottom left
+			x_step = margin + 10  # Slight additional offset from edge
+			y_step = image.height - margin - step_height - 10  # Slight offset from bottom
 
-		# Position step number in bottom left
-		x_step = margin + 10  # Slight additional offset from edge
-		y_step = image.height - margin - step_height - 10  # Slight offset from bottom
+			# Draw rounded rectangle background for step number
+			padding = 20  # Increased padding
+			step_bg_bbox = (
+				x_step - padding,
+				y_step - padding,
+				x_step + step_width + padding,
+				y_step + step_height + padding,
+			)
+			draw.rounded_rectangle(
+				step_bg_bbox,
+				radius=15,  # Add rounded corners
+				fill=text_box_color,
+			)
 
-		# Draw rounded rectangle background for step number
-		padding = 20  # Increased padding
-		step_bg_bbox = (
-			x_step - padding,
-			y_step - padding,
-			x_step + step_width + padding,
-			y_step + step_height + padding,
-		)
-		draw.rounded_rectangle(
-			step_bg_bbox,
-			radius=15,  # Add rounded corners
-			fill=(0, 0, 0, 255),
-		)
-
-		# Draw step number
-		draw.text(
-			(x_step, y_step),
-			step_text,
-			font=title_font,
-			fill=(255, 255, 255, 255),
-		)
+			# Draw step number
+			draw.text(
+				(x_step, y_step),
+				step_text,
+				font=title_font,
+				fill=text_color,
+			)
 
 		# Draw goal text (centered, bottom)
 		max_width = image.width - (4 * margin)
@@ -860,7 +865,7 @@ class Agent:
 		draw.rounded_rectangle(
 			goal_bg_bbox,
 			radius=15,  # Add rounded corners
-			fill=(0, 0, 0, 255),
+			fill=text_box_color,
 		)
 
 		# Draw goal text
@@ -868,7 +873,7 @@ class Agent:
 			(x_goal, y_goal),
 			wrapped_goal,
 			font=title_font,
-			fill=(255, 255, 255, 255),
+			fill=text_color,
 			align='center',
 		)
 
