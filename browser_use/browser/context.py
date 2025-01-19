@@ -122,12 +122,10 @@ class BrowserContext:
     ):
         if session and session.session_id:
             self.context_id = session.session_id
-            logger.debug(f'Attaching to existing browser context with id: {
-                         self.context_id}')
+            logger.debug(f'Attaching to existing browser context with id: {self.context_id}')
         else:
             self.context_id = str(uuid.uuid4())
-            logger.debug(f'Initializing new browser context with id: {
-                         self.context_id}')
+            logger.debug(f'Initializing new browser context with id: {self.context_id}')
 
         self.config = config
         self.browser = browser
@@ -156,8 +154,7 @@ class BrowserContext:
             if self.config.trace_path:
                 try:
                     await self.session.context.tracing.stop(
-                        path=os.path.join(self.config.trace_path, f'{
-                                          self.context_id}.zip')
+                        path=os.path.join(self.config.trace_path, f'{self.context_id}.zip')
                     )
                 except Exception as e:
                     logger.debug(f'Failed to stop tracing: {e}')
@@ -267,8 +264,7 @@ class BrowserContext:
         if self.config.cookies_file and os.path.exists(self.config.cookies_file):
             with open(self.config.cookies_file, 'r') as f:
                 cookies = json.load(f)
-                logger.info(f'Loaded {len(cookies)} cookies from {
-                            self.config.cookies_file}')
+                logger.info(f'Loaded {len(cookies)} cookies from {self.config.cookies_file}')
                 await context.add_cookies(cookies)
 
         # Expose anti-detection scripts
@@ -464,10 +460,8 @@ class BrowserContext:
                     break
                 if now - start_time > self.config.maximum_wait_page_load_time:
                     logger.debug(
-                        f'Network timeout after {self.config.maximum_wait_page_load_time}s with {
-                            len(pending_requests)} '
-                        f'pending requests: {
-                            [r.url for r in pending_requests]}'
+                        f'Network timeout after {self.config.maximum_wait_page_load_time}s with {len(pending_requests)} '
+                        f'pending requests: {[r.url for r in pending_requests]}'
                     )
                     break
 
@@ -477,8 +471,7 @@ class BrowserContext:
             page.remove_listener('response', on_response)
 
         logger.debug(
-            f'Network stabilized for {
-                self.config.wait_for_network_idle_page_load_time} seconds'
+            f'Network stabilized for {self.config.wait_for_network_idle_page_load_time} seconds'
         )
 
     async def _wait_for_page_and_frames_load(self, timeout_overwrite: float | None = None):
@@ -504,8 +497,7 @@ class BrowserContext:
             (timeout_overwrite or self.config.minimum_wait_page_load_time) - elapsed, 0)
 
         logger.debug(
-            f'--Page loaded in {elapsed:.2f} seconds, waiting for additional {
-                remaining:.2f} seconds'
+            f'--Page loaded in {elapsed:.2f} seconds, waiting for additional {remaining:.2f} seconds'
         )
 
         # Sleep remaining time if needed
@@ -870,8 +862,7 @@ class BrowserContext:
 
         except Exception as e:
             raise Exception(
-                f'Failed to input text into element: {
-                    repr(element_node)}. Error: {str(e)}'
+                f'Failed to input text into element: {repr(element_node)}. Error: {str(e)}'
             )
 
     async def _click_element_node(self, element_node: DOMElementNode):
@@ -899,8 +890,7 @@ class BrowserContext:
                     raise Exception(f'Failed to click element: {str(e)}')
 
         except Exception as e:
-            raise Exception(f'Failed to click element: {
-                            repr(element_node)}. Error: {str(e)}')
+            raise Exception(f'Failed to click element: {repr(element_node)}. Error: {str(e)}')
 
     async def get_tabs_info(self) -> list[TabInfo]:
         """Get information about all tabs"""
@@ -964,8 +954,7 @@ class BrowserContext:
         if self.session and self.session.context and self.config.cookies_file:
             try:
                 cookies = await self.session.context.cookies()
-                logger.info(f'Saving {len(cookies)} cookies to {
-                            self.config.cookies_file}')
+                logger.info(f'Saving {len(cookies)} cookies to {self.config.cookies_file}')
 
                 # Check if the path is a directory and create it if necessary
                 dirname = os.path.dirname(self.config.cookies_file)
