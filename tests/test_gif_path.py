@@ -11,34 +11,33 @@ from browser_use.browser.browser import Browser, BrowserConfig
 from browser_use.browser.context import BrowserContext, BrowserContextConfig
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import asyncio
 
 from langchain_openai import ChatOpenAI
 
 from browser_use import Agent, AgentHistoryList, Controller
 
 llm = ChatOpenAI(model='gpt-4o')
-# browser = Browser(config=BrowserConfig(headless=False))
 
 agent = Agent(
 	task=(
-		'go to https://codepen.io/shyam-king/pen/pvzpByJ and first get all options for the dropdown and then select the json option'
+		'go to google.com and search for text "hi there"'
 	),
 	llm=llm,
 	browser_context=BrowserContext(
 		browser=Browser(config=BrowserConfig(headless=False, disable_security=True)),
 	),
+	generate_gif="./google.gif"
 )
 
 
-async def test_dropdown():
+async def test_gif_path():
+	if os.path.exists("./google.gif"):
+		os.unlink("./google.gif")
+
 	history: AgentHistoryList = await agent.run(20)
-	# await controller.browser.close(force=True)
 
 	result = history.final_result()
 	assert result is not None
-	# await browser.close()
 
+	assert os.path.exists("./google.gif"), "google.gif was not created"
 
-if __name__ == '__main__':
-	asyncio.run(test_dropdown())

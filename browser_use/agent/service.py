@@ -20,6 +20,7 @@ from langchain_core.messages import (
 	BaseMessage,
 	SystemMessage,
 )
+from lmnr import observe
 from openai import RateLimitError
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, ValidationError
@@ -67,13 +68,13 @@ class Agent:
 		controller: Controller = Controller(),
 		use_vision: bool = True,
 		save_conversation_path: Optional[str] = None,
-		save_conversation_path_encoding: Optional[str] = "utf-8",
+		save_conversation_path_encoding: Optional[str] = 'utf-8',
 		max_failures: int = 3,
 		retry_delay: int = 10,
 		system_prompt_class: Type[SystemPrompt] = SystemPrompt,
 		max_input_tokens: int = 128000,
 		validate_output: bool = False,
-		generate_gif: bool = True,
+		generate_gif: bool | str = True,
 		include_attributes: list[str] = [
 			'title',
 			'type',
@@ -88,7 +89,7 @@ class Agent:
 		],
 		max_error_length: int = 400,
 		max_actions_per_step: int = 10,
-		tool_call_in_content: bool = True,
+		tool_calling_method: Optional[str] = 'auto',
 	):
 		self.agent_id = str(uuid.uuid4())  # unique identifier for the agent
 
@@ -101,6 +102,7 @@ class Agent:
 		self.include_attributes = include_attributes
 		self.max_error_length = max_error_length
 		self.generate_gif = generate_gif
+
 		# Controller setup
 		self.controller = controller
 		self.max_actions_per_step = max_actions_per_step
@@ -116,9 +118,7 @@ class Agent:
 		if browser_context:
 			self.browser_context = browser_context
 		elif self.browser:
-			self.browser_context = BrowserContext(
-				browser=self.browser, config=self.browser.config.new_context_config
-			)
+			self.browser_context = BrowserContext(browser=self.browser, config=self.browser.config.new_context_config)
 		else:
 			# If neither is provided, create both new
 			self.browser = Browser()
@@ -131,9 +131,12 @@ class Agent:
 
 		# Action and output models setup
 		self._setup_action_models()
-
+		self._set_version_and_source()
 		self.max_input_tokens = max_input_tokens
-		self.tool_call_in_content = tool_call_in_content
+
+		self._set_model_names()
+
+		self.tool_calling_method = self.set_tool_calling_method(tool_calling_method)
 
 		self.message_manager = MessageManager(
 			llm=self.llm,
@@ -144,7 +147,6 @@ class Agent:
 			include_attributes=self.include_attributes,
 			max_error_length=self.max_error_length,
 			max_actions_per_step=self.max_actions_per_step,
-			tool_call_in_content=tool_call_in_content,
 		)
 
 		# Tracking variables
@@ -158,12 +160,51 @@ class Agent:
 		if save_conversation_path:
 			logger.info(f'Saving conversation to {save_conversation_path}')
 
+	def _set_version_and_source(self) -> None:
+		try:
+			import pkg_resources
+
+			version = pkg_resources.get_distribution('browser-use').version
+			source = 'pip'
+		except Exception:
+			try:
+				import subprocess
+
+				version = subprocess.check_output(['git', 'describe', '--tags']).decode('utf-8').strip()
+				source = 'git'
+			except Exception:
+				version = 'unknown'
+				source = 'unknown'
+		logger.debug(f'Version: {version}, Source: {source}')
+		self.version = version
+		self.source = source
+
+	def _set_model_names(self) -> None:
+		self.chat_model_library = self.llm.__class__.__name__
+		if hasattr(self.llm, 'model_name'):
+			self.model_name = self.llm.model_name  # type: ignore
+		elif hasattr(self.llm, 'model'):
+			self.model_name = self.llm.model  # type: ignore
+		else:
+			self.model_name = 'Unknown'
+
 	def _setup_action_models(self) -> None:
 		"""Setup dynamic action models from controller's registry"""
 		# Get the dynamic action model from controller's registry
 		self.ActionModel = self.controller.registry.create_action_model()
 		# Create output model with the dynamic actions
 		self.AgentOutput = AgentOutput.type_with_custom_actions(self.ActionModel)
+
+	def set_tool_calling_method(self, tool_calling_method: Optional[str]) -> Optional[str]:
+		if tool_calling_method == 'auto':
+			if self.chat_model_library == 'ChatGoogleGenerativeAI':
+				return None
+			elif self.chat_model_library == 'ChatOpenAI':
+				return 'function_calling'
+			elif self.chat_model_library == 'AzureChatOpenAI':
+				return 'function_calling'
+			else:
+				return None
 
 	@time_execution_async('--step')
 	async def step(self, step_info: Optional[AgentStepInfo] = None) -> None:
@@ -187,9 +228,7 @@ class Agent:
 				self.message_manager._remove_last_state_message()
 				raise e
 
-			result: list[ActionResult] = await self.controller.multi_act(
-				model_output.action, self.browser_context
-			)
+			result: list[ActionResult] = await self.controller.multi_act(model_output.action, self.browser_context)
 			self._last_result = result
 
 			if len(result) > 0 and result[-1].is_done:
@@ -202,11 +241,7 @@ class Agent:
 			self._last_result = result
 
 		finally:
-			actions = (
-				[a.model_dump(exclude_unset=True) for a in model_output.action]
-				if model_output
-				else []
-			)
+			actions = [a.model_dump(exclude_unset=True) for a in model_output.action] if model_output else []
 			self.telemetry.capture(
 				AgentStepTelemetryEvent(
 					agent_id=self.agent_id,
@@ -233,9 +268,7 @@ class Agent:
 			if 'Max token limit reached' in error_msg:
 				# cut tokens from history
 				self.message_manager.max_input_tokens = self.max_input_tokens - 500
-				logger.info(
-					f'Cutting tokens from history - new max input tokens: {self.message_manager.max_input_tokens}'
-				)
+				logger.info(f'Cutting tokens from history - new max input tokens: {self.message_manager.max_input_tokens}')
 				self.message_manager.cut_messages()
 			elif 'Could not parse response' in error_msg:
 				# give model a hint how output should look like
@@ -263,9 +296,7 @@ class Agent:
 		len_result = len(result)
 
 		if model_output:
-			interacted_elements = AgentHistory.get_interacted_element(
-				model_output, state.selector_map
-			)
+			interacted_elements = AgentHistory.get_interacted_element(model_output, state.selector_map)
 		else:
 			interacted_elements = [None]
 
@@ -284,13 +315,16 @@ class Agent:
 	@time_execution_async('--get_next_action')
 	async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
 		"""Get next action from LLM based on current state"""
+		if self.tool_calling_method is None:
+			structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
+		else:
+			structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True, method=self.tool_calling_method)
 
-		structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
 		response: dict[str, Any] = await structured_llm.ainvoke(input_messages)  # type: ignore
 
 		parsed: AgentOutput = response['parsed']
 		if parsed is None:
-			raise ValueError(f'Could not parse response.')
+			raise ValueError('Could not parse response.')
 
 		# cut the number of actions to max_actions_per_step
 		parsed.action = parsed.action[: self.max_actions_per_step]
@@ -312,9 +346,7 @@ class Agent:
 		logger.info(f'🧠 Memory: {response.current_state.memory}')
 		logger.info(f'🎯 Next goal: {response.current_state.next_goal}')
 		for i, action in enumerate(response.action):
-			logger.info(
-				f'🛠️  Action {i + 1}/{len(response.action)}: {action.model_dump_json(exclude_unset=True)}'
-			)
+			logger.info(f'🛠️  Action {i + 1}/{len(response.action)}: {action.model_dump_json(exclude_unset=True)}')
 
 	def _save_conversation(self, input_messages: list[BaseMessage], response: Any) -> None:
 		"""Save conversation history to file if path is specified"""
@@ -324,7 +356,11 @@ class Agent:
 		# create folders if not exists
 		os.makedirs(os.path.dirname(self.save_conversation_path), exist_ok=True)
 
-		with open(self.save_conversation_path + f'_{self.n_steps}.txt', 'w', encoding=self.save_conversation_path_encoding) as f:
+		with open(
+			self.save_conversation_path + f'_{self.n_steps}.txt',
+			'w',
+			encoding=self.save_conversation_path_encoding,
+		) as f:
 			self._write_messages_to_file(f, input_messages)
 			self._write_response_to_file(f, response)
 
@@ -354,44 +390,21 @@ class Agent:
 	def _log_agent_run(self) -> None:
 		"""Log the agent run"""
 		logger.info(f'🚀 Starting task: {self.task}')
-		# model_name is eiter model or model_name
-		if hasattr(self.llm, 'model_name'):
-			model_name = self.llm.model_name  # type: ignore
-		elif hasattr(self.llm, 'model'):
-			model_name = self.llm.model  # type: ignore
-		else:
-			model_name = 'Unknown'
 
-		try:
-			import pkg_resources
-
-			version = pkg_resources.get_distribution('browser-use').version
-			source = 'pip'
-		except Exception:
-			try:
-				import subprocess
-
-				version = (
-					subprocess.check_output(['git', 'describe', '--tags']).decode('utf-8').strip()
-				)
-				source = 'git'
-			except Exception:
-				version = 'unknown'
-				source = 'unknown'
-		logger.debug(f'Version: {version}, Source: {source}')
+		logger.debug(f'Version: {self.version}, Source: {self.source}')
 		self.telemetry.capture(
 			AgentRunTelemetryEvent(
 				agent_id=self.agent_id,
 				use_vision=self.use_vision,
-				tool_call_in_content=self.tool_call_in_content,
 				task=self.task,
-				model_name=model_name,
-				chat_model_library=self.llm.__class__.__name__,
-				version=version,
-				source=source,
+				model_name=self.model_name,
+				chat_model_library=self.chat_model_library,
+				version=self.version,
+				source=self.source,
 			)
 		)
 
+	@observe(name='agent.run')
 	async def run(self, max_steps: int = 100) -> AgentHistoryList:
 		"""Execute the task with maximum number of steps"""
 		try:
@@ -404,9 +417,7 @@ class Agent:
 				await self.step()
 
 				if self.history.is_done():
-					if (
-						self.validate_output and step < max_steps - 1
-					):  # if last step, we dont need to validate
+					if self.validate_output and step < max_steps - 1:  # if last step, we dont need to validate
 						if not await self._validate_output():
 							continue
 
@@ -434,7 +445,11 @@ class Agent:
 				await self.browser.close()
 
 			if self.generate_gif:
-				self.create_history_gif()
+				output_path: str = 'agent_history.gif'
+				if isinstance(self.generate_gif, str):
+					output_path = self.generate_gif
+
+				self.create_history_gif(output_path=output_path)
 
 	def _too_many_failures(self) -> bool:
 		"""Check if we should stop due to too many failures"""
@@ -507,11 +522,7 @@ class Agent:
 		results = []
 
 		for i, history_item in enumerate(history.history):
-			goal = (
-				history_item.model_output.current_state.next_goal
-				if history_item.model_output
-				else ''
-			)
+			goal = history_item.model_output.current_state.next_goal if history_item.model_output else ''
 			logger.info(f'Replaying step {i + 1}/{len(history.history)}: goal: {goal}')
 
 			if (
@@ -539,16 +550,12 @@ class Agent:
 							results.append(ActionResult(error=error_msg))
 							raise RuntimeError(error_msg)
 					else:
-						logger.warning(
-							f'Step {i + 1} failed (attempt {retry_count}/{max_retries}), retrying...'
-						)
+						logger.warning(f'Step {i + 1} failed (attempt {retry_count}/{max_retries}), retrying...')
 						await asyncio.sleep(delay_between_actions)
 
 		return results
 
-	async def _execute_history_step(
-		self, history_item: AgentHistory, delay: float
-	) -> list[ActionResult]:
+	async def _execute_history_step(self, history_item: AgentHistory, delay: float) -> list[ActionResult]:
 		"""Execute a single step from history with element validation"""
 
 		state = await self.browser_context.get_state()
@@ -584,9 +591,7 @@ class Agent:
 		if not historical_element or not current_state.element_tree:
 			return action
 
-		current_element = HistoryTreeProcessor.find_history_element_in_tree(
-			historical_element, current_state.element_tree
-		)
+		current_element = HistoryTreeProcessor.find_history_element_in_tree(historical_element, current_state.element_tree)
 
 		if not current_element or current_element.highlight_index is None:
 			return None
@@ -594,15 +599,11 @@ class Agent:
 		old_index = action.get_index()
 		if old_index != current_element.highlight_index:
 			action.set_index(current_element.highlight_index)
-			logger.info(
-				f'Element moved in DOM, updated index from {old_index} to {current_element.highlight_index}'
-			)
+			logger.info(f'Element moved in DOM, updated index from {old_index} to {current_element.highlight_index}')
 
 		return action
 
-	async def load_and_rerun(
-		self, history_file: Optional[str | Path] = None, **kwargs
-	) -> list[ActionResult]:
+	async def load_and_rerun(self, history_file: Optional[str | Path] = None, **kwargs) -> list[ActionResult]:
 		"""
 		Load history from file and rerun it.
 
@@ -655,9 +656,7 @@ class Agent:
 				try:
 					if platform.system() == 'Windows':
 						# Need to specify the abs font path on Windows
-						font_name = os.path.join(
-							os.getenv('WIN_FONT_DIR', 'C:\\Windows\\Fonts'), font_name + '.ttf'
-						)
+						font_name = os.path.join(os.getenv('WIN_FONT_DIR', 'C:\\Windows\\Fonts'), font_name + '.ttf')
 					regular_font = ImageFont.truetype(font_name, font_size)
 					title_font = ImageFont.truetype(font_name, title_font_size)
 					goal_font = ImageFont.truetype(font_name, goal_font_size)
@@ -757,9 +756,7 @@ class Agent:
 		# Draw task text with increased font size
 		margin = 140  # Increased margin
 		max_width = image.width - (2 * margin)
-		larger_font = ImageFont.truetype(
-			regular_font.path, regular_font.size + 16
-		)  # Increase font size more
+		larger_font = ImageFont.truetype(regular_font.path, regular_font.size + 16)  # Increase font size more
 		wrapped_text = self._wrap_text(task, larger_font, max_width)
 
 		# Calculate line height with spacing
@@ -803,7 +800,7 @@ class Agent:
 		margin: int,
 		logo: Optional[Image.Image] = None,
 		display_step: bool = True,
-		text_color: tuple[int,int,int,int] = (255, 255, 255, 255),
+		text_color: tuple[int, int, int, int] = (255, 255, 255, 255),
 		text_box_color: tuple[int, int, int, int] = (0, 0, 0, 255),
 	) -> Image.Image:
 		"""Add step number and goal overlay to an image."""
@@ -922,9 +919,7 @@ class Agent:
 
 		return '\n'.join(lines)
 
-	def _create_frame(
-		self, screenshot: str, text: str, step_number: int, width: int = 1200, height: int = 800
-	) -> Image.Image:
+	def _create_frame(self, screenshot: str, text: str, step_number: int, width: int = 1200, height: int = 800) -> Image.Image:
 		"""Create a frame for the GIF with improved styling"""
 
 		# Create base image
@@ -947,9 +942,7 @@ class Agent:
 		if os.path.exists(logo_path):
 			logo = Image.open(logo_path)
 			logo.thumbnail((logo_size, logo_size))
-			frame.paste(
-				logo, (width - logo_size - 20, 20), logo if 'A' in logo.getbands() else None
-			)
+			frame.paste(logo, (width - logo_size - 20, 20), logo if 'A' in logo.getbands() else None)
 
 		# Create drawing context
 		draw = ImageDraw.Draw(frame)

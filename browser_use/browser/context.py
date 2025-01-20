@@ -79,12 +79,16 @@ class BrowserContextConfig:
             trace_path: None
                     Path to save trace files. It will auto name the file with the TRACE_PATH/{context_id}.zip
 
-            build_dom_tree_js: None
-                    JavaScript code to build DOM tree. If not provided, default code will be used.
+		locale: None
+			Specify user locale, for example en-GB, de-DE, etc. Locale will affect navigator.language value, Accept-Language request header value as well as number and date formatting rules. If not provided, defaults to the system default locale.
 
-            locale: None
-                    Specify user locale, for example en-GB, de-DE, etc. Locale will affect navigator.language value, Accept-Language request header value as well as number and date formatting rules. If not provided, defaults to the system default locale.
-    """
+		user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36'
+			custom user agent to use.
+               
+        build_dom_tree_js: None
+            JavaScript code to build DOM tree. If not provided, default code will be used.
+
+	"""
 
     cookies_file: str | None = None
     minimum_wait_page_load_time: float = 0.5
@@ -94,15 +98,16 @@ class BrowserContextConfig:
 
     disable_security: bool = False
 
-    browser_window_size: BrowserContextWindowSize = field(
-        default_factory=lambda: {'width': 1280, 'height': 1100}
-    )
+    browser_window_size: BrowserContextWindowSize = field(default_factory=lambda: {'width': 1280, 'height': 1100})
     no_viewport: Optional[bool] = None
 
     save_recording_path: str | None = None
     trace_path: str | None = None
-    build_dom_tree_js: str | None = None
     locale: str | None = None
+    user_agent: str = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36  (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36'
+    )
+    build_dom_tree_js: str | None = None
 
 
 @dataclass
@@ -153,9 +158,7 @@ class BrowserContext:
 
             if self.config.trace_path:
                 try:
-                    await self.session.context.tracing.stop(
-                        path=os.path.join(self.config.trace_path, f'{self.context_id}.zip')
-                    )
+                    await self.session.context.tracing.stop(path=os.path.join(self.config.trace_path, f'{self.context_id}.zip'))
                 except Exception as e:
                     logger.debug(f'Failed to stop tracing: {e}')
 
@@ -238,7 +241,9 @@ class BrowserContext:
 
     async def _create_context(self, browser: PlaywrightBrowser):
         """Creates a new browser context with anti-detection measures and loads cookies if available."""
-        if self.browser.config.chrome_instance_path and len(browser.contexts) > 0:
+        if self.browser.config.cdp_url and len(browser.contexts) > 0:
+            context = browser.contexts[0]
+        elif self.browser.config.chrome_instance_path and len(browser.contexts) > 0:
             # Connect to existing Chrome instance instead of creating new one
             context = browser.contexts[0]
         else:
@@ -246,15 +251,12 @@ class BrowserContext:
             context = await browser.new_context(
                 viewport=self.config.browser_window_size,
                 no_viewport=False,
-                user_agent=(
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                    '(KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36'
-                ),
+                user_agent=self.config.user_agent,
                 java_script_enabled=True,
                 bypass_csp=self.config.disable_security,
                 ignore_https_errors=self.config.disable_security,
                 record_video_dir=self.config.save_recording_path,
-                locale=self.config.locale
+                locale=self.config.locale,
             )
 
         if self.config.trace_path:
@@ -453,10 +455,7 @@ class BrowserContext:
             while True:
                 await asyncio.sleep(0.1)
                 now = asyncio.get_event_loop().time()
-                if (
-                        len(pending_requests) == 0
-                        and (now - last_activity) >= self.config.wait_for_network_idle_page_load_time
-                ):
+                if len(pending_requests) == 0 and (now - last_activity) >= self.config.wait_for_network_idle_page_load_time:
                     break
                 if now - start_time > self.config.maximum_wait_page_load_time:
                     logger.debug(
@@ -464,15 +463,14 @@ class BrowserContext:
                         f'pending requests: {[r.url for r in pending_requests]}'
                     )
                     break
-
+        except Exception as e:
+            logger.error(f'Error while waiting for stable network: {e}')
         finally:
             # Clean up event listeners
             page.remove_listener('request', on_request)
             page.remove_listener('response', on_response)
 
-        logger.debug(
-            f'Network stabilized for {self.config.wait_for_network_idle_page_load_time} seconds'
-        )
+        logger.debug(f'Network stabilized for {self.config.wait_for_network_idle_page_load_time} seconds')
 
     async def _wait_for_page_and_frames_load(self, timeout_overwrite: float | None = None):
         """
@@ -496,9 +494,7 @@ class BrowserContext:
         remaining = max(
             (timeout_overwrite or self.config.minimum_wait_page_load_time) - elapsed, 0)
 
-        logger.debug(
-            f'--Page loaded in {elapsed:.2f} seconds, waiting for additional {remaining:.2f} seconds'
-        )
+        logger.debug(f'--Page loaded in {elapsed:.2f} seconds, waiting for additional {remaining:.2f} seconds')
 
         # Sleep remaining time if needed
         if remaining > 0:
@@ -564,7 +560,7 @@ class BrowserContext:
 
         return session.cached_state
 
-    async def _update_state(self, use_vision: bool = False) -> BrowserState:
+    async def _update_state(self, use_vision: bool = False, focus_element: int = -1) -> BrowserState:
         """Update and return state."""
         session = await self.get_session()
 
@@ -586,9 +582,8 @@ class BrowserContext:
 
         try:
             await self.remove_highlights()
-            dom_service = DomService(
-                page, build_dom_tree_js=self.config.build_dom_tree_js)
-            content = await dom_service.get_clickable_elements()
+            dom_service = DomService(page, build_dom_tree_js=self.config.build_dom_tree_js)
+            content = await dom_service.get_clickable_elements(focus_element=focus_element)
 
             screenshot_b64 = None
             if use_vision:
@@ -694,7 +689,7 @@ class BrowserContext:
                         # Handle numeric indices
                         if idx.isdigit():
                             index = int(idx) - 1
-                            base_part += f':nth-of-type({index+1})'
+                            base_part += f':nth-of-type({index + 1})'
                         # Handle last() function
                         elif idx == 'last()':
                             base_part += ':last-of-type'
@@ -795,16 +790,19 @@ class BrowserContext:
                 # Escape special characters in attribute names
                 safe_attribute = attribute.replace(':', r'\:')
 
-                # Handle different value cases
+				# Handle different value cases
                 if value == '':
                     css_selector += f'[{safe_attribute}]'
-                elif any(char in value for char in '"\'<>`'):
+                elif any(char in value for char in '"\'<>`\n\r\t'):
                     # Use contains for values with special characters
-                    safe_value = value.replace('"', '\\"')
+                    # Regex-substitute *any* whitespace with a single space, then strip.
+                    collapsed_value = re.sub(r'\s+', ' ', value).strip()
+                    # Escape embedded double-quotes.
+                    safe_value = collapsed_value.replace('"', '\\"')
                     css_selector += f'[{safe_attribute}*="{safe_value}"]'
                 else:
                     css_selector += f'[{safe_attribute}="{value}"]'
-
+    
             return css_selector
 
         except Exception:
@@ -815,20 +813,20 @@ class BrowserContext:
     async def get_locate_element(self, element: DOMElementNode) -> ElementHandle | None:
         current_frame = await self.get_current_page()
 
-        # Start with the target element and collect all parents
+		# Start with the target element and collect all parents
         parents: list[DOMElementNode] = []
         current = element
         while current.parent is not None:
             parent = current.parent
             parents.append(parent)
             current = parent
-            if parent.tag_name == 'iframe':
-                break
 
-        # There can be only one iframe parent (by design of the loop above)
-        iframe_parent = [item for item in parents if item.tag_name == 'iframe']
-        if iframe_parent:
-            parent = iframe_parent[0]
+        # Reverse the parents list to process from top to bottom
+        parents.reverse()
+
+        # Process all iframe parents in sequence
+        iframes = [item for item in parents if item.tag_name == 'iframe']
+        for parent in iframes:
             css_selector = self._enhanced_css_selector_for_element(parent)
             current_frame = current_frame.frame_locator(css_selector)
 
@@ -849,6 +847,10 @@ class BrowserContext:
 
     async def _input_text_element_node(self, element_node: DOMElementNode, text: str):
         try:
+            # Highlight before typing
+            if element_node.highlight_index is not None:
+                await self._update_state(focus_element=element_node.highlight_index)
+
             page = await self.get_current_page()
             element = await self.get_locate_element(element_node)
 
@@ -861,9 +863,7 @@ class BrowserContext:
             await page.wait_for_load_state()
 
         except Exception as e:
-            raise Exception(
-                f'Failed to input text into element: {repr(element_node)}. Error: {str(e)}'
-            )
+            raise Exception(f'Failed to input text into element: {repr(element_node)}. Error: {str(e)}')
 
     async def _click_element_node(self, element_node: DOMElementNode):
         """
@@ -872,6 +872,10 @@ class BrowserContext:
         page = await self.get_current_page()
 
         try:
+            # Highlight before clicking
+            if element_node.highlight_index is not None:
+                await self._update_state(focus_element=element_node.highlight_index)
+
             element = await self.get_locate_element(element_node)
 
             if element is None:
@@ -966,9 +970,7 @@ class BrowserContext:
             except Exception as e:
                 logger.warning(f'Failed to save cookies: {str(e)}')
 
-    async def is_file_uploader(
-            self, element_node: DOMElementNode, max_depth: int = 3, current_depth: int = 0
-    ) -> bool:
+    async def is_file_uploader(self, element_node: DOMElementNode, max_depth: int = 3, current_depth: int = 0) -> bool:
         """Check if element or its children are file uploaders"""
         if current_depth > max_depth:
             return False
@@ -981,10 +983,7 @@ class BrowserContext:
 
         # Check for file input attributes
         if element_node.tag_name == 'input':
-            is_uploader = (
-                element_node.attributes.get('type') == 'file'
-                or element_node.attributes.get('accept') is not None
-            )
+            is_uploader = element_node.attributes.get('type') == 'file' or element_node.attributes.get('accept') is not None
 
         if is_uploader:
             return True
