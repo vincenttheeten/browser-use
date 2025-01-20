@@ -121,13 +121,13 @@ class AgentHistoryList(BaseModel):
 		"""Representation of the AgentHistoryList object"""
 		return self.__str__()
 
-	def save_to_file(self, filepath: str | Path) -> None:
+	def save_to_file(self, filepath: str | Path, cls: type[json.JSONEncoder] | None = None) -> None:
 		"""Save history to JSON file with proper serialization"""
 		try:
 			Path(filepath).parent.mkdir(parents=True, exist_ok=True)
 			data = self.model_dump()
 			with open(filepath, 'w', encoding='utf-8') as f:
-				json.dump(data, f, indent=2)
+				json.dump(data, f, indent=2, cls=cls)
 		except Exception as e:
 			raise e
 
@@ -139,11 +139,11 @@ class AgentHistoryList(BaseModel):
 
 	@classmethod
 	def load_from_file(
-		cls, filepath: str | Path, output_model: Type[AgentOutput]
+		cls, filepath: str | Path, output_model: Type[AgentOutput], object_hook = None
 	) -> 'AgentHistoryList':
 		"""Load history from JSON file"""
 		with open(filepath, 'r', encoding='utf-8') as f:
-			data = json.load(f)
+			data = json.load(f, object_hook=object_hook)
 		# loop through history and validate output_model actions to enrich with custom actions
 		for h in data['history']:
 			if h['model_output']:
